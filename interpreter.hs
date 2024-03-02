@@ -15,28 +15,26 @@ data Result a = Success a [Char] | Failure [Char] | EndOfFile
 
 type Parser a = [Char] -> Result a
 
-singleCharParser :: (Char -> Bool) -> [Char] -> Result Char
+singleCharParser :: (Char -> Bool) -> Parser Char
 singleCharParser condition (a:as)
   | condition a  = Success a as
   | otherwise    = Failure (a:as)
 
-
-
-
 sequence :: Parser a -> Parser b -> Parser (a,b)
-sequence parserA parserB input =
+sequence p q input =
+  case p input of
+    Failure remainder -> Failure remainder
+    Success parsedP remainderP ->
+      case q remainderP of
+        Failure remainderQ -> Failure input
+        Success parsedQ remainderQ -> Success (parsedP, parsedQ) remainderQ
+
+-- try to use sequence to write a parser for strings of alpha-chars
+
+
   
 
 {-
- if (parserA input) is a success,
-   let Success parsedA remainderA = (parserA input) 
-   if (parserB remainderA) is a success,
-    let Success parsedB remainderB = (parserB remainderA)
-    return Success (parsedA, parsedB) remainderB
-   if (parserB remainderA) is a failure,
-     return (Failure input)
-
-if (parserA input) is a failure, return (Failure input)
 
 
 -}
