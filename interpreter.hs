@@ -9,24 +9,45 @@ main = do
 -- input, expected,
 -- f input == expected
 -- 
-data Variable = String
-data Expression = Int | Variable | Application Expression Expression
- | Function Variable Expression | Definition Expression Expression
+data Expression = String | Application Expression Expression
+ | Function String Expression | Definition Expression Expression
 
-data Token = Word String | LeftParens | RightParens 
+data Token = Identifier String | LeftParens | RightParens | WhiteSpace
 
 data Result a = Success a [Char] | Failure deriving Show
 
+data Tree a = Leaf a | Tree (Tree a) (Tree a)
 
 type Parser a = [Char] -> Result a
 
 parse :: String -> String
 parse input = input
 
+-- remove leading spaces from string
+acceptWhiteSpace :: Parser Char
+acceptWhiteSpace "" = Failure
+acceptWhiteSpace (' ':as) = Success ' ' as
+acceptWhiteSpace otherInput = Failure
 
 
-parseDefinition :: Parser Expression
-parseDefinition = productParse (stringParser "define") parseExpression
+leftToken :: Parser Token
+leftToken ('(':rest) = Success LeftParens rest
+leftToken _ = Failure
+
+rightToken :: Parser Token
+rightToken (')':rest) = Success RightParens rest
+rightToken _ = Failure
+
+spaceToken :: Parser Token
+spaceToken (' ':rest) = Success WhiteSpace rest
+spaceToken _ = Failure
+
+idToken :: Parser Token
+idToken = mapParser Identifier wordParser
+
+tokenize :: Parser [Token]
+tokenize = runAndCollect (try [rightToken, leftToken, spaceToken, idToken])
+
 
 -- succeeds if input starts with a letter
 letterParser :: Parser Char
@@ -54,6 +75,10 @@ productParse join p q input =
         Failure -> Failure
         Success parsedQ remainderQ -> Success (join parsedP parsedQ) remainderQ
 
+stringParse :: String -> Parser String
+stringParse "" = Success ""
+stringParse (a:as) = productParse (:) (charParser a) (stringParse as)
+
 
 -- try to run p and then q, and collect the results into a pair
 pairParse :: (a -> b -> b) -> b -> Parser a -> Parser b -> Parser b
@@ -67,14 +92,26 @@ pairParse join identity p q input = case p input of
 runAndCollect :: Parser a -> Parser [a]
 runAndCollect p = pairParse (:) [] p (runAndCollect p)
 
--- try to parse with parser a or parser b
-parallel :: Parser a -> Parser b -> Parser (Either a b)
+-- try to parse leading word
+wordParser :: Parser String
+wordParser = runAndCollect (conditionParser isAlpha)
+
+-- try to parse with p or q
+parallel :: Parser a -> Parser a -> Parser a
 parallel p q input =
   case p input of
-    Success parsedP remainderP -> Success (Left parsedP) remainderP
+    Success parsedP remainderP -> Success parsedP remainderP
     Failure -> case q input of
-        Success parsedQ remainderQ -> Success (Right parsedQ) remainderQ
+        Success parsedQ remainderQ -> Success parsedQ remainderQ
         Failure -> Failure
+
+-- given a list of parsers, try each one, and return the result
+-- of whichever one succeeds first, otherwise fail
+try :: [Parser a] -> Parser a
+try = foldr parallel failParser 
+
+failParser :: Parser a
+failParser input = Failure
 
 mapParser :: (a -> b) -> Parser a -> Parser b
 mapParser f parser input =
@@ -86,9 +123,10 @@ applyParser :: Parser (a -> b) -> Parser a -> Parser b
 applyParser parseFunction parseArgument input =
   case parseFunction input of
     Failure -> Failure
-    Success f remainder -> case parseArgument remainder of
-      Failure -> Failure
-      Success argument rest -> Success (f argument) rest
+    Success f remainder ->
+      case parseArgument remainder of
+        Failure -> Failure
+        Success argument rest -> Success (f argument) rest
 
 bindParser :: Parser a -> (a -> Parser b) -> Parser b
 bindParser p f input = case p input of
@@ -101,3 +139,24 @@ pureParser = Success
 stringParser :: String -> Parser String
 stringParser "" = Success ""
 stringParser (x:xs) = applyParser (mapParser (:) (charParser x)) (stringParser xs)
+
+{-
+tokenize:
+ignore whitespace,
+parse ( and )
+parse words
+
+a b c d . . .
+
+
+
+
+Word is a list of letters (non-whitespace, non-parens)
+space-sep-list expr = list of exprs separated by spaces
+
+expr = Word | space-sep-list expr | leftParens + expr + rightParens
+
+
+
+-}
+
