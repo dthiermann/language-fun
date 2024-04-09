@@ -1,72 +1,101 @@
 import Data.Char
+import Text.XHtml (input)
 
 main :: IO ()
 main = do
   contents <- readFile "input.txt"
-  print (parse contents)
+  print (tokenize contents)
 
 -- testing
 -- input, expected,
 -- f input == expected
--- 
+-- test f input expected = (f input == expected)
+-- f:A -> B, input:A  expected:B
+data TestCase a b = TestCase (a -> b) a b
+
+-- run a single test case
+run :: Eq b => TestCase a b -> Bool
+run (TestCase f input expected) = f input == expected
+
+-- definitions and functions start with special keywords,
+-- applications do not
 data Expression = String | Application Expression Expression
  | Function String Expression | Definition Expression Expression
 
-data Token = Identifier String | LeftParens | RightParens | WhiteSpace
+data Token = Identifier String | LeftParens | RightParens | Empty
+ | Define | Lambda
+  deriving (Eq, Show)
 
-data Result a = Success a [Char] | Failure deriving Show
+data Result a i = Success a [i] | Failure | EndOfInput
+  deriving Show
 
 data Tree a = Leaf a | Tree (Tree a) (Tree a)
 
-type Parser a = [Char] -> Result a
+type Parser a i = [i] -> Result a i
 
 parse :: String -> String
 parse input = input
 
 -- remove leading spaces from string
-acceptWhiteSpace :: Parser Char
+acceptWhiteSpace :: Parser Char Char
 acceptWhiteSpace "" = Failure
 acceptWhiteSpace (' ':as) = Success ' ' as
 acceptWhiteSpace otherInput = Failure
 
 
-leftToken :: Parser Token
-leftToken ('(':rest) = Success LeftParens rest
-leftToken _ = Failure
+charToToken :: Char -> Token
+charToToken '(' = LeftParens
+charToToken ')' = RightParens
+charToToken '\\' = Lambda
+charToToken _   = Empty
 
-rightToken :: Parser Token
-rightToken (')':rest) = Success RightParens rest
-rightToken _ = Failure
+stringToToken :: String -> Token
+stringToToken "define" = Define
+stringToToken name = Identifier name
 
-spaceToken :: Parser Token
-spaceToken (' ':rest) = Success WhiteSpace rest
-spaceToken _ = Failure
+charToTokenParser :: Char -> Parser Token Char
+charToTokenParser c = mapParser charToToken (charParser c)
 
-idToken :: Parser Token
-idToken = mapParser Identifier wordParser
+leftToken :: Parser Token Char
+leftToken = charToTokenParser '('
 
-tokenize :: Parser [Token]
-tokenize = runAndCollect (try [rightToken, leftToken, spaceToken, idToken])
+rightToken :: Parser Token Char
+rightToken = charToTokenParser ')'
+
+spaceToken :: Parser Token Char
+spaceToken = charToTokenParser ' '
+
+idToken :: Parser Token Char
+idToken  = mapParser Identifier wordParser 
 
 
+parseToken :: Parser Token Char
+parseToken = try [rightToken, leftToken, spaceToken, idToken]
+
+tokenize :: Parser [Token] Char
+tokenize = mapParser removeSpaces (collectNonEmpty parseToken)
+
+
+removeSpaces :: [Token] -> [Token]
+removeSpaces = filter (/= Empty)
 -- succeeds if input starts with a letter
-letterParser :: Parser Char
+letterParser :: Parser Char Char
 letterParser = conditionParser isAlpha
 
 -- parse first char of input based on boolean condition
-conditionParser :: (Char -> Bool) -> Parser Char
+conditionParser :: (i -> Bool) -> Parser i i
 conditionParser condition [] = Failure
 conditionParser condition (a:as)
   | condition a  = Success a as
   | otherwise    = Failure
 
--- succeed if first char of input is c, fail otherwise
-charParser :: Char -> Parser Char
+-- succeed if first item of input is c, fail otherwise
+charParser :: Eq i => i -> Parser i i
 charParser c = conditionParser (c ==) 
 
 -- try to run parser a and then parser b
 -- if either one fails, the entire parser fails and the parsed remnant is discarded
-productParse :: (a -> b -> c) -> Parser a -> Parser b -> Parser c
+productParse :: (a -> b -> c) -> Parser a i -> Parser b i -> Parser c i
 productParse join p q input =
   case p input of
     Failure -> Failure
@@ -75,29 +104,54 @@ productParse join p q input =
         Failure -> Failure
         Success parsedQ remainderQ -> Success (join parsedP parsedQ) remainderQ
 
-stringParse :: String -> Parser String
+stringParse :: String -> Parser String Char
 stringParse "" = Success ""
 stringParse (a:as) = productParse (:) (charParser a) (stringParse as)
 
 
 -- try to run p and then q, and collect the results into a pair
-pairParse :: (a -> b -> b) -> b -> Parser a -> Parser b -> Parser b
+-- always returns a Success
+pairParse :: (a -> b -> b) -> b -> Parser a i-> Parser b i-> Parser b i
 pairParse join identity p q input = case p input of
   Failure -> Success identity input
   Success parsedP remainderP -> case q remainderP of
     Failure -> Success (join parsedP identity) remainderP
     Success parsedQ remainderQ -> Success (join parsedP parsedQ) remainderQ
 
--- run p until failure and collect the results
-runAndCollect :: Parser a -> Parser [a]
-runAndCollect p = pairParse (:) [] p (runAndCollect p)
+{-
+run p until it fails,
+if p fails the first time, (collectNonEmpty p) fails,
+if p succeeds at least once, (collectNonEmpty p) succeeds and returns
+all the successful parses in a list
+-}
+collectNonEmpty :: Parser a i -> Parser [a] i
+collectNonEmpty p input =
+  case p input of
+    Failure -> Failure
+    Success parsed rem -> collectAnything p input
 
--- try to parse leading word
-wordParser :: Parser String
-wordParser = runAndCollect (conditionParser isAlpha)
+-- runs p on the input until p fails
+--always returns a Success
+--if p fails immediately, return S [] input
+--otherwise return a list of the successful parsed pieces and the rem
+collectAnything :: Parser a i -> Parser [a] i
+collectAnything p input =
+  case p input of
+    Failure -> Success [] input
+    Success parsed rem -> mapResult (parsed:) (collectAnything p rem)
+
+-- applies a function to the output of a successful parse
+mapResult :: (a -> b) -> Result a i -> Result b i
+mapResult f (Success parsed rem) = Success (f parsed) rem
+mapResult f Failure = Failure
+
+-- try to parse leading string of alphabetic chars
+-- fails if the input does not begin with an alphabetic char
+wordParser :: Parser String Char
+wordParser = collectNonEmpty letterParser
 
 -- try to parse with p or q
-parallel :: Parser a -> Parser a -> Parser a
+parallel :: Parser a i-> Parser a i -> Parser a i
 parallel p q input =
   case p input of
     Success parsedP remainderP -> Success parsedP remainderP
@@ -107,19 +161,19 @@ parallel p q input =
 
 -- given a list of parsers, try each one, and return the result
 -- of whichever one succeeds first, otherwise fail
-try :: [Parser a] -> Parser a
+try :: [Parser a i] -> Parser a i
 try = foldr parallel failParser 
 
-failParser :: Parser a
+failParser :: Parser a i
 failParser input = Failure
 
-mapParser :: (a -> b) -> Parser a -> Parser b
+mapParser :: (a -> b) -> Parser a i-> Parser b i
 mapParser f parser input =
   case parser input of
     Success parsed remainder -> Success (f parsed) remainder
     Failure -> Failure
 
-applyParser :: Parser (a -> b) -> Parser a -> Parser b
+applyParser :: Parser (a -> b) i -> Parser a i -> Parser b i
 applyParser parseFunction parseArgument input =
   case parseFunction input of
     Failure -> Failure
@@ -128,16 +182,16 @@ applyParser parseFunction parseArgument input =
         Failure -> Failure
         Success argument rest -> Success (f argument) rest
 
-bindParser :: Parser a -> (a -> Parser b) -> Parser b
+bindParser :: Parser a i -> (a -> Parser b i) -> Parser b i
 bindParser p f input = case p input of
   Failure -> Failure
   Success parsed remainder -> f parsed remainder
 
-pureParser :: a -> Parser a
+pureParser :: a -> Parser a i
 pureParser = Success
 
-stringParser :: String -> Parser String
-stringParser "" = Success ""
+stringParser :: Eq i => [i] -> Parser [i] i
+stringParser [] = Success []
 stringParser (x:xs) = applyParser (mapParser (:) (charParser x)) (stringParser xs)
 
 {-
