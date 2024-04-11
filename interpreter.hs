@@ -2,14 +2,14 @@ import Data.Char
 import Text.XHtml (input)
 
 -- TODO:
--- tokenize should handle all kinds of chars
+-- tokenize should handle all kinds of chars: newlines, tabs, numbers, symbols
 -- write more tests
 -- remove unneeded functions
 
 main :: IO ()
 main = do
   contents <- readFile "input.txt"
-  print (tokenize contents)
+  print (run testTokenize)
 
 -- testing
 -- input, expected,
@@ -17,10 +17,30 @@ main = do
 -- test f input expected = (f input == expected)
 -- f:A -> B, input:A  expected:B
 data TestCase a b = TestCase (a -> b) a b
+data TestResult b = Passed | Error b b
+instance Show b => Show (TestResult b) where
+  show Passed = "Passed"
+  show (Error output expected) =
+    "Failed\n" ++ 
+    "Expected: " <> show expected ++ "\n" ++
+    "Actual: " <> show output
 
 -- run a single test case
-run :: Eq b => TestCase a b -> Bool
-run (TestCase f input expected) = f input == expected
+-- if the test passed, just tell us that
+-- if the test failed, get the expected and the actual output 
+run :: Eq b => TestCase a b -> TestResult b
+run (TestCase f input expected) =
+  if f input == expected
+    then Passed
+  else Error (f input) expected
+
+-- tests
+testTokenize :: TestCase [Char] (Result [Token] Char)
+testTokenize = TestCase tokenize "(define (hello x) ) )"
+  (Success [LeftParens, Define, LeftParens, Identifier "hello",
+   Identifier "x", RightParens, RightParens, RightParens] [])
+
+
 
 -- definitions and functions start with special keywords,
 -- applications do not
@@ -32,21 +52,13 @@ data Token = Identifier String | LeftParens | RightParens | Empty
   deriving (Eq, Show)
 
 data Result a i = Success a [i] | Failure | EndOfInput
-  deriving Show
+  deriving (Eq, Show)
 
-data Tree a = Leaf a | Tree (Tree a) (Tree a)
 
 type Parser a i = [i] -> Result a i
 
 parse :: String -> String
 parse input = input
-
--- remove leading spaces from string
-acceptWhiteSpace :: Parser Char Char
-acceptWhiteSpace "" = Failure
-acceptWhiteSpace (' ':as) = Success ' ' as
-acceptWhiteSpace otherInput = Failure
-
 
 charToToken :: Char -> Token
 charToToken '(' = LeftParens
@@ -57,6 +69,12 @@ charToToken _   = Empty
 stringToToken :: String -> Token
 stringToToken "define" = Define
 stringToToken name = Identifier name
+
+stringToTokenParser :: String -> Parser Token Char
+stringToTokenParser str = mapParser stringToToken (stringParse str)
+
+defineToken :: Parser Token Char
+defineToken = stringToTokenParser "define"
 
 charToTokenParser :: Char -> Parser Token Char
 charToTokenParser c = mapParser charToToken (charParser c)
@@ -75,7 +93,7 @@ idToken  = mapParser Identifier wordParser
 
 
 parseToken :: Parser Token Char
-parseToken = try [rightToken, leftToken, spaceToken, idToken]
+parseToken = try [defineToken, rightToken, leftToken, spaceToken, idToken]
 
 tokenize :: Parser [Token] Char
 tokenize = mapParser removeSpaces (collectNonEmpty parseToken)
@@ -172,6 +190,7 @@ parallel p q input =
 
 -- given a list of parsers, try each one, and return the result
 -- of whichever one succeeds first, otherwise fail
+-- note that order matters
 try :: [Parser a i] -> Parser a i
 try = foldr parallel failParser 
 
@@ -179,7 +198,4 @@ failParser :: Parser a i
 failParser input = Failure
 
 mapParser :: (a -> b) -> Parser a i-> Parser b i
-mapParser f parser input =
-  case parser input of
-    Success parsed remainder -> Success (f parsed) remainder
-    Failure -> Failure
+mapParser f p input = mapResult f (p input)
