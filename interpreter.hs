@@ -1,6 +1,11 @@
 import Data.Char
 import Text.XHtml (input)
 
+-- TODO:
+-- tokenize should handle all kinds of chars
+-- write more tests
+-- remove unneeded functions
+
 main :: IO ()
 main = do
   contents <- readFile "input.txt"
@@ -82,7 +87,8 @@ removeSpaces = filter (/= Empty)
 letterParser :: Parser Char Char
 letterParser = conditionParser isAlpha
 
--- parse first char of input based on boolean condition
+-- parse first element of input based on boolean condition
+-- fails on empty input
 conditionParser :: (i -> Bool) -> Parser i i
 conditionParser condition [] = Failure
 conditionParser condition (a:as)
@@ -104,6 +110,11 @@ productParse join p q input =
         Failure -> Failure
         Success parsedQ remainderQ -> Success (join parsedP parsedQ) remainderQ
 
+-- given a string, returns a parser
+-- if the string is empty, returns a parser that succeeds on any input
+-- if the string is non-empty:
+--    parser succeeds if input starts with that string
+--    parser fails on empty input
 stringParse :: String -> Parser String Char
 stringParse "" = Success ""
 stringParse (a:as) = productParse (:) (charParser a) (stringParse as)
@@ -172,45 +183,3 @@ mapParser f parser input =
   case parser input of
     Success parsed remainder -> Success (f parsed) remainder
     Failure -> Failure
-
-applyParser :: Parser (a -> b) i -> Parser a i -> Parser b i
-applyParser parseFunction parseArgument input =
-  case parseFunction input of
-    Failure -> Failure
-    Success f remainder ->
-      case parseArgument remainder of
-        Failure -> Failure
-        Success argument rest -> Success (f argument) rest
-
-bindParser :: Parser a i -> (a -> Parser b i) -> Parser b i
-bindParser p f input = case p input of
-  Failure -> Failure
-  Success parsed remainder -> f parsed remainder
-
-pureParser :: a -> Parser a i
-pureParser = Success
-
-stringParser :: Eq i => [i] -> Parser [i] i
-stringParser [] = Success []
-stringParser (x:xs) = applyParser (mapParser (:) (charParser x)) (stringParser xs)
-
-{-
-tokenize:
-ignore whitespace,
-parse ( and )
-parse words
-
-a b c d . . .
-
-
-
-
-Word is a list of letters (non-whitespace, non-parens)
-space-sep-list expr = list of exprs separated by spaces
-
-expr = Word | space-sep-list expr | leftParens + expr + rightParens
-
-
-
--}
-
